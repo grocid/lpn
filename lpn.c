@@ -14,7 +14,6 @@ report bugs to carl@eit.lth.se
 
 #define SECRET_WEIGHT       5
 #define BKW_ITERATIONS      4
-
 #define QUERY_LENGTH        60
 #define REPETITIONS         3
 
@@ -25,10 +24,9 @@ report bugs to carl@eit.lth.se
 #define MASK                ((0x1ull << QUERY_LENGTH)-1)
 #define INFO_MASK           ((0x1ull << INFORMATION_SPAN)-1)
 #define REP_MASK            ((0x1ull << REPETITIONS)-1)
-
-#define TABLE_FACTOR        5
 #define REP_MASK_TABLE      ((0x1ull << (REPETITIONS*TABLE_FACTOR))-1)
 
+#define TABLE_FACTOR        5
 #define TRESHOLD            3
 #define CONSTANT_FLAG       ((0x1ull<<62)-1)
 
