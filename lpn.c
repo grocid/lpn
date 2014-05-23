@@ -12,25 +12,25 @@ report bugs to carl@eit.lth.se
 #include <inttypes.h>
 #include <time.h>
 
-#define SECRET_WEIGHT		5
-#define BKW_ITERATIONS		4
+#define SECRET_WEIGHT       5
+#define BKW_ITERATIONS      4
 
-#define QUERY_LENGTH		60
-#define REPETITIONS			3
+#define QUERY_LENGTH        60
+#define REPETITIONS         3
 
 #define REQUIRED_SAMPLES    (1 << 24)
 #define INFORMATION_SPAN    (QUERY_LENGTH/REPETITIONS)
-#define ERROR_RATIO			0.5*(1-(pow(0.8, (1 << BKW_ITERATIONS))))
+#define ERROR_RATIO         0.5*(1-(pow(0.8, (1 << BKW_ITERATIONS))))
 
-#define MASK				((0x1ull << QUERY_LENGTH)-1)
-#define INFO_MASK			((0x1ull << INFORMATION_SPAN)-1)
-#define REP_MASK			((0x1ull << REPETITIONS)-1)
+#define MASK                ((0x1ull << QUERY_LENGTH)-1)
+#define INFO_MASK           ((0x1ull << INFORMATION_SPAN)-1)
+#define REP_MASK            ((0x1ull << REPETITIONS)-1)
 
-#define TABLE_FACTOR		5
-#define REP_MASK_TABLE		((0x1ull << (REPETITIONS*TABLE_FACTOR))-1)
+#define TABLE_FACTOR        5
+#define REP_MASK_TABLE      ((0x1ull << (REPETITIONS*TABLE_FACTOR))-1)
 
-#define TRESHOLD			3
-#define CONSTANT_FLAG		((0x1ull<<62)-1)
+#define TRESHOLD            3
+#define CONSTANT_FLAG       ((0x1ull<<62)-1)
 
 uint64_t repetition_table[(1 << (REPETITIONS*TABLE_FACTOR))];
 int total_discarded = 0;
