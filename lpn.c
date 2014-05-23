@@ -1,52 +1,113 @@
+/*
+LPN solver using covering codes
+This code simulates the subspace hypothesis testing
+
+report bugs to carl@eit.lth.se
+
+*/
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
 #include <inttypes.h>
+#include <time.h>
 
+#define SECRET_WEIGHT		5
+#define BKW_ITERATIONS		4
 
-#define INFORMATION_SPAN    21
-#define REQUIRED_SAMPLES    (1<<INFORMATION_SPAN)
-#define CODE_LENGTH         7
-//#define INLINE
+#define QUERY_LENGTH		60
+#define REPETITIONS			3
 
-//#define OSX_64
+#define REQUIRED_SAMPLES    (1 << 24)
+#define INFORMATION_SPAN    (QUERY_LENGTH/REPETITIONS)
+#define ERROR_RATIO			0.5*(1-(pow(0.8, (1 << BKW_ITERATIONS))))
 
-uint64_t mask = (~0ull)<<(63-INFORMATION_SPAN);
-uint64_t code_mask = 0x7full;
-uint64_t lookup[1<<7];
+#define MASK				((0x1ull << QUERY_LENGTH)-1)
+#define INFO_MASK			((0x1ull << INFORMATION_SPAN)-1)
+#define REP_MASK			((0x1ull << REPETITIONS)-1)
+
+#define TABLE_FACTOR		5
+#define REP_MASK_TABLE		((0x1ull << (REPETITIONS*TABLE_FACTOR))-1)
+
+#define TRESHOLD			3
+#define CONSTANT_FLAG		((0x1ull<<62)-1)
+
+uint64_t repetition_table[(1 << (REPETITIONS*TABLE_FACTOR))];
+int total_discarded = 0;
 
 /* print bits in decending magnitude */
-void print_bits(uint64_t dword) {
+void 
+print_bits32(uint32_t word) {
     int i;
     printf("msb -> ");
-    for(i = 63; i >= 0; --i) {
-        printf("%d", (int)((dword >> i) & 1));
+    for(i = 31; i >= 0; --i) {
+        printf("%d", (int)((word >> i) & 1));
     }
     printf("\n");
 }
 
+uint64_t 
+decode_repetition(uint64_t codeword, int information_bits) {
+	uint64_t y = 0x0ull; 
+	int i, j, total = 0;
+	for(i = 0; i < information_bits; i++) {
+		j = codeword & REP_MASK;
+    	j = (j & 0x55) + (j >> 1 & 0x55);
+    	j = (j & 0x33) + (j >> 2 & 0x33);
+    	j = (j & 0x0f) + (j >> 4 & 0x0f);
+		if (j > 1) {
+			y ^= (j > 1) << (i);
+		}
+		total += (j == 2) || ( j== 2);
+		codeword >>= REPETITIONS;
+	}
+	/* for simplicity, we check the weight here
+	 	even though we may discard some more samples */
+	if (total > TRESHOLD) {
+		y = CONSTANT_FLAG;
+	}
+	return y;
+}
+
+
+void 
+make_table() {
+	uint64_t i;
+	for(i = 0; i < (1 << (REPETITIONS*TABLE_FACTOR)); ++i) {
+		repetition_table[i] = decode_repetition(i, (REPETITIONS*TABLE_FACTOR));
+	}
+}
+
+uint64_t 
+decode_repetition_table(uint64_t codeword, int information_chunks) {
+	uint64_t y = 0x0ull, j = 0x0ull; 
+	int i;
+	for(i = 0; i < information_chunks; i++) {
+		j = repetition_table[codeword & REP_MASK_TABLE] << (i*TABLE_FACTOR);
+		if (repetition_table[codeword & REP_MASK_TABLE] == CONSTANT_FLAG) {
+			return CONSTANT_FLAG;
+		}
+		y ^= j;
+		codeword >>= (REPETITIONS*TABLE_FACTOR);
+	}
+	return y;
+}
 
 /* generate a vector from a hammingball of size p */
-#ifdef INLINE
-inline 
-#endif
 uint64_t in_ball_rand(int p) {
     int i, x;
     uint64_t res = 0x0ull;
     for(i = 0; i < p; ++i) {
-        x = 63-INFORMATION_SPAN+(rand() % INFORMATION_SPAN);
+        x = rand() % QUERY_LENGTH;
         res ^= (0x1ull << x);
     }
     return res;
 }
 
 /* random function for 32/64-bit systems */
-#ifdef INLINE
-inline 
-#endif
 uint64_t rand64() {
     #ifdef OSX_64
-        rand();
+        return rand();
     #else
         uint64_t num;
         num = rand();
@@ -55,6 +116,7 @@ uint64_t rand64() {
     #endif
 }
 
+/* parity function */
 #ifdef INLINE
 inline 
 #endif
@@ -63,42 +125,24 @@ uint64_t parity(uint64_t v) {
     v ^= v >> 1;
     v ^= v >> 2;
     v = (v & 0x1111111111111111ul) * 0x1111111111111111ul;
-    return (v >> 60) & 1;
+    return (v >> 60) & 0x1ull;
 }
 
-
-
-/* make a table of the code */
-void make_table() {
-    /* we use a [7,4,3] hamming code 
-    0001111
-    0110011  = H
-    1010101
-    */
-    uint64_t code[3] = {0xfull,
-                        0x33ull,
-                        0x55ull};
-    
-    uint64_t i, result = 0, row;
-    for(i = 0; i < (1<<7); ++i) {
-        /* i is the received codeword */
-        result = 0;
-        for (row = 0; row < 3; ++row) {
-            result ^= parity(code[row]&i) << row;
-        }
-        lookup[i] = i ^ ((result != 0) << (result-1));
-    }
-}
-
-void transform_to_distr(uint64_t* from_queries, int32_t* to_distr) {
+/* make table into frequency distribution table */
+void 
+transform_to_distr(uint64_t* from_queries, int32_t* to_distr) {
     int i;
+    for(i = 0; i < (1 << INFORMATION_SPAN); ++i) {
+        to_distr[i] = 0;
+    }
     for(i = 0; i < REQUIRED_SAMPLES; ++i) {
-        to_distr[from_queries[i] >> (63-INFORMATION_SPAN)] += (0x1ull & from_queries[i]) ? -1 : 1;
+        to_distr[from_queries[i] & INFO_MASK] += (0x1ull & (from_queries[i] >> 63)) ? -1 : 1;
     }
 }
 
-/* Thanks to Paul */
-void FWHT(int32_t *distr) {
+/* fast walsh-hadamard transform */
+void 
+FWHT(int32_t *distr) {
     uint64_t i, j, k;
     for (i = 0; i < INFORMATION_SPAN; ++i) {  
         for (j = 0; j < (0x1ull << INFORMATION_SPAN); j += (0x1ull << (i+1))) {
@@ -112,12 +156,25 @@ void FWHT(int32_t *distr) {
     }
 }
 
-uint64_t get_max_solution(int32_t *distr) {
+uint64_t 
+transform_solution(uint64_t secret) {
+	int i;
+	uint64_t answer = 0x0ull;
+	for (i = 0; i < INFORMATION_SPAN; ++i) { 
+		answer ^= (parity(secret & REP_MASK) << i);
+		secret = secret >> REPETITIONS;
+	}
+	return answer;
+}
+
+/* find-max */
+uint64_t 
+get_max_solution(int32_t *distr) {
     int32_t max_val = -100000, entry;
     int i;
     for(i = 0; i < REQUIRED_SAMPLES; ++i) {
-        if (distr[i] > max_val) {
-            max_val = distr[i];
+        if (abs(distr[i]) > max_val) {
+            max_val = abs(distr[i]);
             entry = i;
         }
     }
@@ -125,84 +182,71 @@ uint64_t get_max_solution(int32_t *distr) {
 }
 
 /* function for testing a hypothesis (counting incorrect) */
-int test_hypothesis(uint64_t* ptr, uint64_t secret) {
+int 
+test_hypothesis(uint64_t* ptr, uint64_t secret) {
     int i = 0, incorrect = 0;
     for(i = 0; i < REQUIRED_SAMPLES; ++i) {
-        incorrect += (ptr[i]&0x1ull) != parity(ptr[i]&secret);
+		//print_bits((ptr[i] >> 63));
+        incorrect += (ptr[i] >> 63) != parity(ptr[i]&secret);
     }
     return incorrect;
 }
 
-/* this is our oracle function */
-void generate_queries(uint64_t* ptr, uint64_t secret) {
+/* this is our LPN-oracle function */
+void 
+generate_queries(uint64_t* ptr, uint64_t secret) {
     int i;
-    uint64_t v, rnd_vect;
+    uint64_t rnd_vect, noise;
     for(i = 0; i < REQUIRED_SAMPLES; ++i) {
-        rnd_vect = rand64() & mask;
-        ptr[i] = parity(rnd_vect&secret); // ^ noise
-        v = lookup[(rnd_vect >> (63-INFORMATION_SPAN)) & code_mask] << (63-INFORMATION_SPAN);
-        v ^= lookup[(rnd_vect >> (63-INFORMATION_SPAN+CODE_LENGTH)) & code_mask] << (63-INFORMATION_SPAN+CODE_LENGTH);
-        v ^= lookup[(rnd_vect >> (63-INFORMATION_SPAN+2*CODE_LENGTH)) & code_mask] << (63-INFORMATION_SPAN+2*CODE_LENGTH);
-        ptr[i] ^= v;
+		noise = (rand()/(double)RAND_MAX) < ERROR_RATIO;
+        rnd_vect = rand64() & MASK;
+        ptr[i] = decode_repetition_table(rnd_vect, INFORMATION_SPAN/TABLE_FACTOR);
+		if (ptr[i] == CONSTANT_FLAG) {
+			i--;
+			total_discarded++;
+		} else {
+		ptr[i] ^= (parity(rnd_vect&secret) ^ noise) << 63;
+		}
     }
 }
 
+int 
+compare(const int32_t *a, const int32_t *b) {
+    return  (abs(*a) < abs(*b))-(abs(*a) > abs(*b));
+}
+
 /* main, sweet main */
-int main ( int arc, char **argv ) { 
-    int pN = 7, discrepancies, i;
-    
+int 
+main ( int arc, char **argv ) {
+	int count = 0; 
+	int32_t x;
     /* set the random seed */
-    srand(2009382);
-    
-    /*  define secret and query list */
-    uint64_t secret = in_ball_rand(pN) & mask;
+	srand(0xCAFE);
+    /*  define secret, query list and distribution */
+    uint64_t secret = in_ball_rand(SECRET_WEIGHT);
     uint64_t* queries = malloc(sizeof(uint64_t)*REQUIRED_SAMPLES);
     int32_t* distr = malloc(sizeof(int32_t)*REQUIRED_SAMPLES);
-    
-    /* make lookup table */
-    make_table();
-    
+	/* make a decoding table */
+	make_table();
     /* generate the list of queries */
     generate_queries(queries, secret);
     transform_to_distr(queries, distr);
-    
-    printf("p = %f, bias € = %f\n\n", 1.0*3/INFORMATION_SPAN, pow(2.0*3/INFORMATION_SPAN-1,pN));
-    
-    discrepancies = test_hypothesis(queries, secret);
-    printf("Observed[ #incorrect | correct hyp ] = ");
-    printf("%d",discrepancies);
-    printf(", bias € = %f\n", pow(2.0*discrepancies/REQUIRED_SAMPLES-1,1));
-    
-    //for(i=0;i<50;++i) {
-     //   printf("%d, ",((queries[i]&0x1ull) != parity(queries[i]&secret)));
-     //   print_bits(queries[i]);
-    //}
-    print_bits(secret);
-    secret = (rand64()& mask);
-/*    printf("   ");
-    print_bits(secret);*/
-    discrepancies = test_hypothesis(queries, secret);
-    printf("Observed[ #incorrect | incorrect hyp ] = ");
-    printf("%d of total %d",discrepancies, REQUIRED_SAMPLES);
-    printf(", bias € = %f\n", 2.0*discrepancies/REQUIRED_SAMPLES-1);
-    
-    for(i = 0; i < (1<<7); ++i) {
-        /* i is the received codeword */
-    //    print_bits(lookup[i]);
-    }
-    
-    FWHT(distr);
-    
-    secret = get_max_solution(distr) << (63-INFORMATION_SPAN);
-    print_bits(secret);
-    discrepancies = test_hypothesis(queries, secret);
-    printf("Observed[ #incorrect | incorrect hyp ] = ");
-    printf("%d of total %d",discrepancies, REQUIRED_SAMPLES);
-    printf(", bias € = %f\n", 2.0*discrepancies/REQUIRED_SAMPLES-1);
-    
-    //print_bits(queries[0]);
-    //print_bits(queries[1]);
-    //print_bits(queries[2]);
-    
-    return 0; // Indicates that everything went well.
+	secret = transform_solution(secret);
+	/* perform hypothesis testing using fast walsh-hadamard transform */
+	FWHT(distr);
+	/* determine bias of the secret and the best bias solution*/
+	printf("\nSample bias:\nTheoretical    \t%f \n",
+		(1-2.0*ERROR_RATIO)*pow(1.0-2.0*TRESHOLD/REPETITIONS/TABLE_FACTOR, SECRET_WEIGHT));
+	printf("Correct secret \t%f \n",1-2.0*test_hypothesis(queries, secret)/REQUIRED_SAMPLES);
+    printf("Found secret   \t%f\n\n", 1-2.0*test_hypothesis(queries, get_max_solution(distr))/REQUIRED_SAMPLES);
+	/* find first occurrence of the bias */
+	x = distr[secret];
+	qsort(distr, REQUIRED_SAMPLES, sizeof(int32_t), compare);
+	while(abs(distr[count]) > abs(x)) count++;
+	printf("The correct solution is at position %d\n", count);
+	printf("Total discarded samples: 2^%f\n", log(total_discarded)/log(2));
+	/* clean up */
+    free(queries);
+    free(distr);
+    return 0; 
 }
